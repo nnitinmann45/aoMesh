@@ -704,3 +704,12 @@ identities or personal data. `MeshEngine::observability_snapshot` and
 aoheyra can map it directly into its APP-15 diagnostics bundle. Adding or
 changing a field is a snapshot schema change and bumps `MESH_SNAPSHOT_VERSION`;
 it does not change packet, sync or beacon bytes.
+
+## MSH-25 host advisory seam
+
+Neighbour hints add no wire fields or capabilities. The host supplies current
+discovery peer/beacon-hint observations and current aoIdents-derived pairwise
+contact hints to `NetworkAdapter::refresh_link_hints`. A beacon prefix match
+is a connection preference, never authentication. Signed MeshHello validation
+remains required. The network alone enforces admission and degree limits.
+See [policy and lifecycle](adr/neighbour-link-hints.md).

@@ -682,3 +682,17 @@ zero at the end by design because scores decay; the cumulative event counter
 is the durable evidence. These metrics are additive and outside the MSH-27 CSV
 schema, so no baseline threshold was weakened. The host maps this plain snapshot into APP-15; aoMesh
 does not implement that bundle.
+
+### Advisory neighbour hints (MSH-25)
+
+| Parameter | Default | Bound and reason |
+| --- | ---: | --- |
+| `MeshConfig.link_hints.max_candidates` | 32 | Same as default mesh neighbours; hard cap 256 |
+| `MeshConfig.link_hints.max_contacts` | 32 | Current pairwise contact hints; hard cap 256 |
+
+The defaults bound event-driven host refresh work and retained peer advice.
+Paired seeds 295383-295386 link the contact within 2 seconds in 4/4 hinted
+runs and 0/4 baseline runs, with a one-link degree cap in both. Mean link
+time is 275 ms versus 4282.5 ms. These measurements justify enabling contact
+advice, not claims of optimal capacity or real-phone energy savings. Policy,
+tradeoffs and reproduction: [MSH-25 ADR](neighbour-link-hints.md).

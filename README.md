@@ -1045,3 +1045,16 @@ neighbour was accounted for. `tests/sim_observability.rs` locks every value,
 and `tests/observability.rs` covers adapter mapping, stability, bounds and
 absence of content leakage. The actual APP-15 bundle wiring belongs to
 aoheyra and consumes this plain snapshot.
+
+### Advisory neighbour selection (MSH-25)
+
+`NetworkAdapter::refresh_link_hints` accepts current host discovery candidates
+and current aoIdents pairwise contact beacon hints. Matching contacts and
+host-observed additional reachability are preferred; existing mesh penalties
+on live links take precedence. aoNetwork continues to enforce every admission
+rule and the degree cap. Refresh on discovery, contact-tag rotation, topology
+or penalty changes; an empty refresh disables the adapter's advice. The host
+must supply discovery observations explicitly and own hint policy for these
+peers. Beacon recognition is advice, never identity authentication.
+`MeshConfig::link_hints` defaults to 32 candidates and 32 contact hints, with a
+hard ceiling of 256 each. See [design and paired measurements](docs/adr/neighbour-link-hints.md).

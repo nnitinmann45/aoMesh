@@ -106,11 +106,16 @@ pub enum AdapterEvent {
 pub struct NetworkAdapter<R: RngCore, T: Transport> {
     engine: MeshEngine<R>,
     network: Network<T>,
+    hinted_peers: std::collections::BTreeSet<ao_network::PeerKey>,
 }
 impl<R: RngCore, T: Transport> NetworkAdapter<R, T> {
     /// Takes ownership of already constructed components.
     pub fn new(engine: MeshEngine<R>, network: Network<T>) -> Self {
-        Self { engine, network }
+        Self {
+            engine,
+            network,
+            hinted_peers: std::collections::BTreeSet::new(),
+        }
     }
     /// Replaces the engine without tearing down the network facade.
     ///
@@ -145,6 +150,47 @@ impl<R: RngCore, T: Transport> NetworkAdapter<R, T> {
     /// simulator uses this with [`Self::engine_mut`] and [`Self::apply`].
     pub fn network_mut(&mut self) -> &mut Network<T> {
         &mut self.network
+    }
+    /// Refresh this adapter's advisory hints from current host observations.
+    ///
+    /// The host owns discovery and contact-tag rotation; refresh after either
+    /// changes and after mesh penalties change. Missing peers are cleared,
+    /// including on an empty refresh (disable). The adapter must be the sole hint owner for supplied peers.
+    /// No contact tags or discovery evidence are retained. Penalties are read
+    /// from the existing engine tracker using aoNetwork's live peer/link binding.
+    /// Validation precedes all mutation; MeshConfig bounds the retained peer set.
+    pub fn refresh_link_hints(
+        &mut self,
+        candidates: &[crate::linkhint::LinkHintCandidate],
+        contact_hints: &[[u8; 8]],
+    ) -> Result<(), crate::linkhint::LinkHintError> {
+        crate::linkhint::validate(self.engine.link_hint_config(), candidates, contact_hints)?;
+        let links = self.network.links();
+        let desired: std::collections::BTreeMap<_, _> = candidates
+            .iter()
+            .map(|candidate| {
+                let penalized = links.iter().any(|link| {
+                    link.peer == candidate.peer && self.engine.budgets().penalty(link.link) > 0
+                });
+                (
+                    candidate.peer,
+                    crate::linkhint::preference(candidate, contact_hints, penalized),
+                )
+            })
+            .collect();
+        for peer in &self.hinted_peers {
+            if !desired.contains_key(peer) {
+                self.network.clear_link_hint(*peer);
+            }
+        }
+        self.hinted_peers.clear();
+        for (peer, preference) in desired {
+            self.network.set_link_hint(peer, preference);
+            if preference != ao_network::LinkHintPreference::Neutral {
+                self.hinted_peers.insert(peer);
+            }
+        }
+        Ok(())
     }
     /// Earliest network timer; the caller must arrange a wakeup by this time.
     pub fn next_deadline(&self) -> Option<Duration> {

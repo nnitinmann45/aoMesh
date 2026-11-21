@@ -7,6 +7,12 @@ change without notice until v0.1.0, and consumers pin by git tag
 
 ## Unreleased
 
+MSH-25 adds bounded host-supplied neighbour advice through the existing
+aoNetwork link-hint API. Contacts and additional reachability are preferred;
+live mesh budget penalties take precedence. Refreshes clear disappeared or
+rotated advice, without retaining keys or changing network admission rules.
+
+
 MSH-19 adds bounded presence announcements. An ordinary signed `Presence`
 packet carries a fixed 150-byte body with the origin's card hash, capabilities,
 sequence and existing public identity, so every relay can verify the binding

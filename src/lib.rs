@@ -52,6 +52,7 @@ pub mod engine;
 pub mod expiry;
 mod forward;
 pub mod hello;
+pub mod linkhint;
 pub mod neighbor;
 pub mod observability;
 pub mod packet;

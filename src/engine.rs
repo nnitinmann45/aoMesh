@@ -411,6 +411,10 @@ impl<R: RngCore> MeshEngine<R> {
     pub fn neighbors(&self) -> &NeighborTable {
         &self.neighbors
     }
+    /// Bounds used by advisory neighbour selection (MSH-25).
+    pub fn link_hint_config(&self) -> crate::linkhint::LinkHintConfig {
+        self.config.link_hints
+    }
     /// Read-only relay budget and penalty state (MSH-10).
     pub fn budgets(&self) -> &BudgetTracker {
         &self.budgets

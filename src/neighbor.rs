@@ -53,6 +53,8 @@ pub struct MeshConfig {
     pub telemetry: TelemetryConfig,
     /// Bounds for local public-channel subscriptions (MSH-23).
     pub channels: ChannelConfig,
+    /// Advisory neighbour selection input bounds (MSH-25).
+    pub link_hints: crate::linkhint::LinkHintConfig,
 }
 
 impl Default for MeshConfig {
@@ -87,6 +89,7 @@ impl Default for MeshConfig {
             route_hint: RouteHintConfig::default(),
             telemetry: TelemetryConfig::default(),
             channels: ChannelConfig::default(),
+            link_hints: crate::linkhint::LinkHintConfig::default(),
         }
     }
 }
