@@ -475,6 +475,7 @@ default: it meets the issue's latency goal without increasing transmissions.
 | Maximum entries | 1024 | Bounded per-destination state at the documented directory scale |
 | Lifetime | 300,000 ms | Shorter than the 10-15 min presence refresh, so stale paths age out |
 | Fresh hop ceiling | 8 | Matches Direct's TTL; longer paths are not trusted |
+
 ## MSH-22 implementation
 
 Telemetry keeps class 4 and the registered packet signature domain; the
@@ -514,3 +515,56 @@ frame and the newest pending replacement: six total receptions, at most two
 sequences at any node, maximum sequence 8, 12 transmissions. The chatty row
 (seed `1297304029`) accepts one of twelve attempts, emits no telemetry frame,
 and records no store copy. `tests/sim_telemetry.rs` locks both exact CSV rows.
+
+## MSH-28 implementation
+
+This issue hardens byte and host-slice boundaries; it changes no routing rate,
+TTL, copy count, lifetime or wire field, so the table above is unchanged and no
+new MSH-27 simulator sweep is claimed. The deterministic measurement is
+`tests/resource_bounds.rs`, which uses a counting allocator and a counted RNG.
+
+| Parameter | Value | Reason |
+|---|---:|---|
+| Packet payload | 2048 bytes | Existing `MAX_PAYLOAD` cap, checked before payload bytes are read |
+| Varint field | 10 bytes | Canonical unsigned LEB128; runaway continuation bytes stop at ten |
+| Summary entries read | 1024 | Equals the store cap; a longer host slice cannot grow the digest or id vector |
+| Offers per `SyncItems` input | 1024 | Equals the summary cap; one input cannot mint unbounded session work |
+| Sync frame body | 8198 bytes | `6 + 1024 * 8`, the largest legitimate MSH-14 summary |
+| Fuzz input / RSS / timeout | 16 KiB / 2048 MiB / 10 s | Above every decoder cap; catches runaway allocation and per-input loops |
+
+Three sync-frame caps were compared. Relying on the two-byte length and the
+256 KiB per-contact budget alone would let one hostile `Item` copy almost
+64 KiB before the contact budget is reached; high CPU and memory churn with no
+legitimate benefit. Capping at aoNetwork's 15 KiB Bulk-frame limit is simple but
+allows nearly twice the largest real body and would hide an oversized summary
+inside the frame. Capping at the largest legitimate body, 8198 bytes, rejects no
+valid frame, keeps the MSH-15 range frames well inside the limit, and gives a
+small typed rejection. That option was chosen. v1 summaries retain their older
+`TooManyEntries` path because their own count is a tighter bound and existing
+tests depend on that error; exact body-length validation was added so extra
+bytes cannot create a second encoding.
+
+Three host-summary policies were compared. Trusting the whole slice would let a
+host or hostile stream allocate an arbitrary vector. Rejecting a longer slice
+would be strict but would need a new `MeshError` branch and could break a host
+whose backend temporarily holds more ids than the store cap. Reading only the
+first 1024 ids is deterministic, matches the engine's own store bound, and
+leaves the public API unchanged; that option was chosen for both
+`StoreSummary::from_ids` and `SyncTracker::on_offers`.
+
+The delivery path contained a `debug_assert_eq!` on an `Offer` outcome. Because
+a malformed sequence could reach it in debug builds and turn rejected input
+into a process abort, it was replaced with a checked outcome. This is a panic
+fix, not a routing change: the packet is still refused and still counted.
+
+`SyncFrame::decode`, `SyncFrameV2::decode`, `SyncError` and `SyncV2Error` are
+public so fuzz targets and hosts can inspect rejections without stringly typed
+errors. `FrameTooLarge(usize)` carries the claimed length for diagnosis.
+`tests/resource_bounds.rs` asserts zero allocations for packet decode, at most
+16 KiB and 4000 allocations across 1000 hostile sync frames, at most 256 KiB
+for repeated 100,000-id summary inputs, at most 32 MiB and 128 allocations per
+input across 1200 hostile engine Data inputs, and store quotas that never
+exceed `StoreLimits`. The three `fuzz/` targets run nightly for one hour each
+with `libFuzzer` under AddressSanitizer; their dev-only dependencies are
+justified in the README. Core dependencies and the sans-IO boundary are
+unchanged.

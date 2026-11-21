@@ -71,6 +71,18 @@ frame plus one pending replacement at each receiver (six receptions, at most
 two sequences per node, sequence 8, 12 transmissions); the chatty seed
 `1297304029` accepts one of twelve attempts and emits no telemetry frame.
 
+MSH-28 adds deterministic resource bounds and fuzz targets for hostile input.
+Packet decoding remains allocation-free; sync frame bodies are capped at 8198
+bytes before copying, summary construction and `SyncItems` handling read at
+most 1024 entries, and a reachable delivery-path debug assertion was removed.
+`SyncFrame::decode`, `SyncFrameV2::decode`, `SyncError` and `SyncV2Error` are
+public with typed `FrameTooLarge(usize)` rejections. New `fuzz/` targets cover
+packet decoding, engine input streams and sync frames; nightly CI runs each for
+one hour with a 16 KiB input cap, 2048 MiB RSS limit and 10-second timeout.
+`tests/resource_bounds.rs` pins allocation and CPU-proxy ceilings with a
+counting allocator. The separate fuzz crate uses dev-only `libfuzzer-sys` and
+`rand`; core dependencies and the sans-IO boundary are unchanged.
+
 MSH-17 adds signed delivery receipts and bounded store immunity. An
 authenticated delivery emits a cap-gated receipt envelope carrying a signed
 Direct acknowledgement, the destination's public identity and the original
