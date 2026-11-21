@@ -295,6 +295,66 @@ impl ReceiptTracker {
         }
     }
 
+    pub(crate) fn snapshot(&self, now: u64) -> Vec<crate::ImmunityRecord> {
+        self.entries
+            .iter()
+            .filter(|(_, e)| e.expires_at_ms > now)
+            .map(|(id, e)| crate::ImmunityRecord {
+                id: *id,
+                receipt: e.wire.clone(),
+                remaining_ms: e.expires_at_ms.saturating_sub(now),
+            })
+            .collect()
+    }
+    pub(crate) fn restored(
+        &self,
+        now: u64,
+        elapsed: u64,
+        records: &[crate::ImmunityRecord],
+    ) -> Result<Self, crate::RestartError> {
+        use crate::restart::{RestartError, deadline};
+        if records.len() > self.config.max_entries {
+            return Err(RestartError::Capacity);
+        }
+        let mut restored = Self::new(self.config);
+        let mut ids = BTreeSet::new();
+        for record in records {
+            if !ids.insert(record.id) {
+                return Err(RestartError::InvalidRecord);
+            }
+            if record.receipt.len()
+                > HEADER_LEN
+                    + PUBLIC_IDENTITY_LEN
+                    + MAX_ORIGINAL_HEADER
+                    + PAYLOAD_HASH_LEN
+                    + MAX_ACK_PACKET
+            {
+                return Err(RestartError::Capacity);
+            }
+            let frame = decode_frame(&record.receipt)
+                .map_err(|_| RestartError::InvalidRecord)?
+                .ok_or(RestartError::InvalidRecord)?;
+            if frame.msg_id != record.id {
+                return Err(RestartError::InvalidRecord);
+            }
+            if let Some(at) = deadline(
+                now,
+                record.remaining_ms,
+                elapsed,
+                self.config.lifetime_s.saturating_mul(1000),
+            )? {
+                restored.entries.insert(
+                    record.id,
+                    Immunity {
+                        wire: record.receipt.clone(),
+                        expires_at_ms: at,
+                        sent_to: BTreeSet::new(),
+                    },
+                );
+            }
+        }
+        Ok(restored)
+    }
     /// Records the capability set a link advertised in its signed hello.
     pub(crate) fn set_caps(&mut self, link: LinkId, caps: u32) {
         if caps & CAP_RECEIPT_V1 != 0 {

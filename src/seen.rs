@@ -136,6 +136,52 @@ impl SeenCache {
         }
     }
 
+    pub(crate) fn snapshot(&self, now: u64) -> Vec<crate::SeenRecord> {
+        let mut emitted = std::collections::BTreeSet::new();
+        self.order
+            .iter()
+            .chain(self.entries.keys())
+            .filter_map(|id| {
+                let deadline = *self.entries.get(id)?;
+                (deadline > now && emitted.insert(*id)).then_some(crate::SeenRecord {
+                    id: *id,
+                    remaining_ms: deadline.saturating_sub(now),
+                })
+            })
+            .collect()
+    }
+    pub(crate) fn restored(
+        &self,
+        now: u64,
+        elapsed: u64,
+        records: &[crate::SeenRecord],
+    ) -> Result<Self, crate::RestartError> {
+        use crate::restart::{RestartError, deadline};
+        if records.len() > self.config.capacity {
+            return Err(RestartError::Capacity);
+        }
+        let mut restored = Self::new(self.config);
+        let mut ids = std::collections::BTreeSet::new();
+        let ceiling = [
+            self.config.direct_lifetime_ms,
+            self.config.broadcast_lifetime_ms,
+            self.config.presence_lifetime_ms,
+            self.config.telemetry_lifetime_ms,
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        for record in records {
+            if !ids.insert(record.id) {
+                return Err(RestartError::InvalidRecord);
+            }
+            if let Some(at) = deadline(now, record.remaining_ms, elapsed, ceiling)? {
+                restored.entries.insert(record.id, at);
+                restored.order.push_back(record.id);
+            }
+        }
+        Ok(restored)
+    }
     /// Offers a packet's `msg_id` and reports whether it was already seen
     /// within the lifetime recorded for `class`.
     ///

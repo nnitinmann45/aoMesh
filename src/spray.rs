@@ -172,6 +172,52 @@ impl SprayTracker {
         }
     }
 
+    pub(crate) fn snapshot(&self, now: u64) -> Vec<crate::CopyRecord> {
+        self.entries
+            .iter()
+            .filter(|(_, e)| e.expires_at_ms > now)
+            .map(|(id, e)| crate::CopyRecord {
+                id: *id,
+                destination: e.destination,
+                copies_left: e.copies_left,
+                remaining_ms: e
+                    .expires_at_ms
+                    .saturating_sub(now)
+                    .min(crate::restart::MAX_RESTART_LIFETIME_MS),
+            })
+            .collect()
+    }
+    pub(crate) fn restored(
+        &self,
+        now: u64,
+        elapsed: u64,
+        records: &[crate::CopyRecord],
+    ) -> Result<Self, crate::RestartError> {
+        use crate::restart::{MAX_RESTART_LIFETIME_MS, RestartError, deadline};
+        if records.len() > self.config.max_entries {
+            return Err(RestartError::Capacity);
+        }
+        let mut restored = Self::new(self.config);
+        let mut ids = BTreeSet::new();
+        for record in records {
+            if !ids.insert(record.id) {
+                return Err(RestartError::InvalidRecord);
+            }
+            if let Some(at) = deadline(now, record.remaining_ms, elapsed, MAX_RESTART_LIFETIME_MS)?
+            {
+                restored.entries.insert(
+                    record.id,
+                    Entry {
+                        copies_left: record.copies_left,
+                        destination: record.destination,
+                        expires_at_ms: at,
+                        handed_to: BTreeSet::new(),
+                    },
+                );
+            }
+        }
+        Ok(restored)
+    }
     /// Records the capability set a link advertised in its signed hello.
     pub(crate) fn set_caps(&mut self, link: LinkId, caps: u32) {
         if caps & crate::hello::CAP_SPRAY_V1 != 0 {
@@ -195,7 +241,7 @@ impl SprayTracker {
         self.config.enabled && self.caps.contains_key(&link)
     }
 
-    /// Starts or refreshes the local ticket for a Direct packet.
+    /// Starts a local ticket once; duplicate observations cannot mint copies.
     pub(crate) fn observe(
         &mut self,
         now: u64,
@@ -205,14 +251,15 @@ impl SprayTracker {
         lifetime_s: u64,
         copies: u8,
     ) {
-        if class != PacketClass::Direct || copies == 0 {
+        if class != PacketClass::Direct || copies == 0 || self.config.max_entries == 0 {
             return;
         }
+        self.expire(now);
         let copies = copies.clamp(1, MAX_COPIES);
         let expires_at_ms = now.saturating_add(lifetime_s.saturating_mul(1_000));
-        if let Some(entry) = self.entries.get_mut(&id) {
-            entry.copies_left = entry.copies_left.max(copies);
-            entry.expires_at_ms = entry.expires_at_ms.max(expires_at_ms);
+        // This also protects restored zero-ticket tombstones from stale
+        // host metadata and loops: a content id gets one local allocation.
+        if self.entries.contains_key(&id) {
             return;
         }
         if self.entries.len() >= self.config.max_entries {
@@ -515,5 +562,50 @@ mod tests {
                 .plan(3_000, id(3), None, [(LINK_A, [4; 16])])
                 .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod restart_regressions {
+    use super::*;
+    #[test]
+    fn duplicate_observations_cannot_refill_spent_or_restored_copies() {
+        let id = MessageId::from_bytes([29; 16]);
+        let mut t = SprayTracker::new(SprayConfig {
+            enabled: true,
+            copies: 8,
+            max_entries: 2,
+        });
+        t.observe(100, id, PacketClass::Direct, [9; 16], 60, 8);
+        let sent = t.plan(100, id, None, [(LinkId::new(1), [9; 16])]);
+        assert_eq!(sent, vec![(LinkId::new(1), 1)]);
+        assert_eq!(t.copies_left(id), 0);
+        let snapshot = t.snapshot(101);
+        let mut restored = t.restored(0, 0, &snapshot).unwrap();
+        restored.observe(1, id, PacketClass::Direct, [9; 16], 3600, 255);
+        assert_eq!(restored.copies_left(id), 0);
+        assert_eq!(restored.snapshot(1)[0].remaining_ms, 59_998);
+        assert!(
+            restored
+                .plan(1, id, None, [(LinkId::new(2), [8; 16])])
+                .is_empty()
+        );
+    }
+    #[test]
+    fn zero_capacity_never_creates_a_snapshot_record() {
+        let mut t = SprayTracker::new(SprayConfig {
+            enabled: true,
+            copies: 8,
+            max_entries: 0,
+        });
+        t.observe(
+            0,
+            MessageId::from_bytes([1; 16]),
+            PacketClass::Direct,
+            [9; 16],
+            60,
+            8,
+        );
+        assert!(t.snapshot(0).is_empty());
     }
 }

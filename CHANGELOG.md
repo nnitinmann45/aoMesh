@@ -7,6 +7,14 @@ change without notice until v0.1.0, and consumers pin by git tag
 
 ## Unreleased
 
+MSH-29 adds bounded, identity-bound restart metadata through a host-owned storage
+trait. Forwarding dedupe, reverified delivery immunity and remaining spray tickets
+survive clock-epoch changes without storing keys, packet payloads or transport
+sessions. Restore is atomic and restricted to fresh engines. Duplicate observations
+cannot refill spent tickets or refresh their lifetime; zero-capacity spray stores
+no records. The application remains responsible for durable store transactions.
+
+
 MSH-19 adds bounded presence announcements. An ordinary signed `Presence`
 packet carries a fixed 150-byte body with the origin's card hash, capabilities,
 sequence and existing public identity, so every relay can verify the binding

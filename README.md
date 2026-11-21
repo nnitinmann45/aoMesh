@@ -873,3 +873,12 @@ for one hour nightly and uploads crash artifacts on failure; no one-hour
 campaign is claimed locally. `libfuzzer-sys` (MIT/Apache-2.0, Rust-Fuzz, small
 binding crate) and `rand` 0.9 (MIT/Apache-2.0, already a dev-dependency) are
 dev-only; the core dependency set is unchanged.
+
+### Restart metadata (MSH-29)
+
+The host implements `RestartStore`, saves `engine.restart_snapshot(now, owner)`
+atomically with MessageStore metadata, and restores a fresh engine with
+`restore_restart(new_now, owner, &snapshot, elapsed_ms)` before any input. Seen
+ids, signed delivery immunity and copy tickets survive local clock-epoch changes;
+spent tickets cannot be refilled by stale observations. The mesh performs no
+filesystem or SQLite operations. See [restart state and the host transaction contract](docs/adr/restart-state.md).

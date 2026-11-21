@@ -317,6 +317,7 @@ impl std::error::Error for MeshError {}
 /// `MeshConfig::directory.capacity` nodes plus
 /// `MeshConfig::directory.max_change_events` UI events (MSH-20).
 pub struct MeshEngine<R: RngCore> {
+    restart_ready: bool,
     rng: R,
     config: MeshConfig,
     neighbors: NeighborTable,
@@ -351,6 +352,7 @@ impl<R: RngCore> MeshEngine<R> {
             .min(config.suppression.telemetry_ttl);
         let budgets = BudgetTracker::new(config.budgets);
         Self {
+            restart_ready: true,
             rng,
             config,
             neighbors: NeighborTable::new(config.max_neighbors),
@@ -424,6 +426,54 @@ impl<R: RngCore> MeshEngine<R> {
     pub(crate) fn is_immune(&self, id: MessageId) -> bool {
         self.receipt.is_immune(id)
     }
+    /// Capture bounded mesh metadata for host-owned storage. Keys and message
+    /// payloads are never included. Caller supplies its account identity.
+    pub fn restart_snapshot(&self, now: u64, owner: NodeId) -> crate::RestartSnapshot {
+        crate::RestartSnapshot {
+            version: crate::restart::RESTART_VERSION,
+            owner,
+            seen: self.seen.snapshot(now),
+            immunity: self.receipt.snapshot(now),
+            copies: self.spray.snapshot(now),
+        }
+    }
+    /// Atomically restore a fresh engine before any input. `elapsed_ms` is
+    /// host-measured downtime, never a comparison of two monotonic epochs.
+    /// If downtime is unknown, zero conservatively retains the saved guards.
+    /// Link ids, timers, capabilities, keys and store bytes are not restored.
+    pub fn restore_restart(
+        &mut self,
+        now: u64,
+        owner: NodeId,
+        snapshot: &crate::RestartSnapshot,
+        elapsed_ms: u64,
+    ) -> Result<(), crate::RestartError> {
+        use crate::RestartError;
+        if !self.restart_ready {
+            return Err(RestartError::AlreadyStarted);
+        }
+        if snapshot.version != crate::restart::RESTART_VERSION {
+            return Err(RestartError::Version);
+        }
+        if snapshot.owner != owner {
+            return Err(RestartError::Owner);
+        }
+        // Count checks precede any allocation, receipt decode, or crypto.
+        if snapshot.seen.len() > self.seen.capacity()
+            || snapshot.immunity.len() > self.config.receipt.max_entries
+            || snapshot.copies.len() > self.config.spray.max_entries
+        {
+            return Err(RestartError::Capacity);
+        }
+        let seen = self.seen.restored(now, elapsed_ms, &snapshot.seen)?;
+        let receipt = self.receipt.restored(now, elapsed_ms, &snapshot.immunity)?;
+        let spray = self.spray.restored(now, elapsed_ms, &snapshot.copies)?;
+        self.seen = seen;
+        self.receipt = receipt;
+        self.spray = spray;
+        self.restart_ready = false;
+        Ok(())
+    }
     /// Processes one input at caller-supplied milliseconds.
     ///
     /// LinkUp decodes, verifies and negotiates the peer's `MeshHello`
@@ -448,6 +498,7 @@ impl<R: RngCore> MeshEngine<R> {
     /// (MSH-13). Submission errors are typed and the caller still owns
     /// the input bytes.
     pub fn handle(&mut self, now: u64, input: MeshInput<'_>) -> Result<Vec<MeshOutput>, MeshError> {
+        self.restart_ready = false;
         match input {
             MeshInput::ObserveNode { observation } => {
                 let node = observation.node;
